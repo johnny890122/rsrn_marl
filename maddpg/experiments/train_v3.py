@@ -20,7 +20,7 @@ from maddpg.trainer.maddpg import MADDPGAgentTrainer
 import tensorflow.contrib.layers as layers
 import csv
 import datetime
-import wandb
+# import wandb
 import ast
 import gzip
 # np.random.seed(101)
@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--scenario", type=str, default="rsrn_original", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=70, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=500000, help="number of episodes")
-    parser.add_argument("--num-agents", type=int, default=3, help="number of agents")
+    parser.add_argument("--num-agents", type=int, default=4, help="number of agents")
     parser.add_argument("--num-landmarks", type=int, default=3, help="number of landmarks")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
@@ -86,6 +86,11 @@ def make_env(scenario_name, arglist, benchmark=False):
         env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation, scenario.benchmark_data)
     else:
         env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation)
+    return env
+
+def make_pd_env():
+    from pd_env.pd_environment import PrisonerDilemmaEnvironment
+    env = PrisonerDilemmaEnvironment()
     return env
 
 def get_trainers(env, num_adversaries, obs_shape_n, arglist):
@@ -184,7 +189,9 @@ def benchmark_data(agent, world):
 def train(arglist):
     with U.single_threaded_session():
         # Create environment
-        env = make_env(arglist.scenario, arglist, arglist.benchmark)
+        # env = make_env(arglist.scenario, arglist, arglist.benchmark)
+        env = make_pd_env()
+        
         # Create agent trainers
         obs_shape_n = [env.observation_space[i].shape for i in range(env.n)]
         num_adversaries = min(env.n, arglist.num_adversaries)
@@ -219,12 +226,14 @@ def train(arglist):
         trajectories = []
         
         print('Starting iterations...')
+        all_actions = []
         while True:
-            
             # get action
             action_n = [agent.action(obs) for agent, obs in zip(trainers,obs_n)]
+            # action_n = [np.random.choice(len(action), p=action) for action in action_n]
             # environment step
-            new_obs_n, rew_n, done_n, info_n = env.step(action_n,episode_step)
+            all_actions.append([np.argmax(action) for action in action_n])
+            new_obs_n, rew_n, done_n, info_n = env.step(action_n, episode_step)
 
             episode_step += 1
             done = all(done_n)
@@ -239,12 +248,15 @@ def train(arglist):
                 # store cumulative reward for each agent
                 cum_shared_rewards[episode_count, i] += rew
 
-            for i, agent in enumerate(env.world.agents):
-                cum_individual_rewards[episode_count, i] += agent.individual_reward
+            # for i, agent in enumerate(env.world.agents):
+                # cum_individual_rewards[episode_count, i] += agent.individual_reward
+            for i in env.agents:
+                cum_individual_rewards[episode_count, i] += env.payoffs[i]
 
             if done or terminal:
-                for i, agent in enumerate(env.world.agents):
-                    final_dis2landmark[episode_count, i] = agent.dist2landmark
+                # for i, agent in enumerate(env.world.agents):
+                # for i, agent in enumerate(env.agents):
+                #     final_dis2landmark[episode_count, i] = agent.dist2landmark
                 if arglist.test_mode:
                     trajectories.append(episode_trajectory)
                     episode_trajectory = []
@@ -261,7 +273,8 @@ def train(arglist):
                 env.render()
                 continue
 
-            env.world.time = episode_step
+            # env.world.time = episode_step
+            env.timestep = episode_step
 
 
             if not arglist.test_mode:
@@ -295,30 +308,30 @@ def train(arglist):
                 roll_mean_indv_rewards = np.mean(cum_individual_rewards[episode_count-arglist.save_rate:episode_count,:], axis=0)
                 roll_mean_dists = np.mean(final_dis2landmark[episode_count-arglist.save_rate:episode_count,:], axis=0)
                 # log rewards according to number of agents
-                if arglist.num_agents == 2:
-                    wandb.log({ "shared reward 1": roll_mean_shared_rewards[0],
-                                "indv reward 1": roll_mean_indv_rewards[0],
-                                "dist2land 1": roll_mean_dists[0],
-                                "shared reward 2": roll_mean_shared_rewards[1],
-                                "indv reward 2": roll_mean_indv_rewards[1],
-                                "dist2land 2": roll_mean_dists[1]
-                                })
-                elif arglist.num_agents == 3:
-                    wandb.log({ "shared reward 1": roll_mean_shared_rewards[0],
-                                "indv reward 1": roll_mean_indv_rewards[0],
-                                "dist2land 1": roll_mean_dists[0],
-                                "shared reward 2": roll_mean_shared_rewards[1],
-                                "indv reward 2": roll_mean_indv_rewards[1],
-                                "dist2land 2": roll_mean_dists[1],
-                                "shared reward 3": roll_mean_shared_rewards[2],
-                                "indv reward 3": roll_mean_indv_rewards[2],
-                                "dist2land 3": roll_mean_dists[2]
-                                })
+                # if arglist.num_agents == 2:
+                #     wandb.log({ "shared reward 1": roll_mean_shared_rewards[0],
+                #                 "indv reward 1": roll_mean_indv_rewards[0],
+                #                 "dist2land 1": roll_mean_dists[0],
+                #                 "shared reward 2": roll_mean_shared_rewards[1],
+                #                 "indv reward 2": roll_mean_indv_rewards[1],
+                #                 "dist2land 2": roll_mean_dists[1]
+                #                 })
+                # elif arglist.num_agents == 3:
+                #     wandb.log({ "shared reward 1": roll_mean_shared_rewards[0],
+                #                 "indv reward 1": roll_mean_indv_rewards[0],
+                #                 "dist2land 1": roll_mean_dists[0],
+                #                 "shared reward 2": roll_mean_shared_rewards[1],
+                #                 "indv reward 2": roll_mean_indv_rewards[1],
+                #                 "dist2land 2": roll_mean_dists[1],
+                #                 "shared reward 3": roll_mean_shared_rewards[2],
+                #                 "indv reward 3": roll_mean_indv_rewards[2],
+                #                 "dist2land 3": roll_mean_dists[2]
+                #                 })
 
                 train_data ={
                     "cum_shared_rewards": cum_shared_rewards,
                     "cum_individual_rewards": cum_individual_rewards,
-                    "final_dis2landmark": final_dis2landmark
+                    # "final_dis2landmark": final_dis2landmark
                 }
                 # pickle.dump(train_data, open(str(arglist.save_dir)+'rewards.pkl', 'wb'))
                 with gzip.open(arglist.save_dir + 'train_log.pkl.gz', 'wb') as f:
@@ -332,11 +345,13 @@ def train(arglist):
                         pickle.dump(trajectories, f)
                     # os.remove(arglist.load_dir + '/test_trajectory.pkl')
 
-                print("episodes: {}, indiv reward: {}, time: {}".format(
+                print("episodes: {}, indiv reward: {}, defect rate: {},time: {}".format(
                     episode_count,
                     roll_mean_indv_rewards,
+                    np.array(all_actions).mean(axis=0),
                     round(time.time()-t_start, 3)))
                 t_start = time.time()
+                all_actions = []
 
             if episode_count >= arglist.num_episodes:
                 print('...Finished total of {} episodes.'.format(episode_count))
@@ -388,34 +403,33 @@ if __name__ == '__main__':
     #################################################
     # EDIT THIS LINE AND ADD YOUR WandB ACCOUNT INFO
     #################################################
-    wandb.init(project='RSRN', entity='haeri-hsn')
-    config = wandb.config
-    if arglist.test_mode:
-        config.test_mode = True
-        config.save_dir = arglist.load_dir
-    else:
-        config.test_mode = False
-    config.network = arglist.network
-    config.num_agents = arglist.num_agents
-    config.num_landmarks = arglist.num_landmarks
-    config.agent_limitation = arglist.agent_limitation
-    config.rsrn_type = arglist.rsrn_type
-    config.boundary = '(-1.2,1.2)'
-    config.learning_rate = arglist.lr
-    config.gamma = arglist.gamma
-    config.batch_size = arglist.batch_size
-    config.num_units = arglist.num_units
-    config.num_episodes = arglist.num_episodes
-    config.max_episode_len = arglist.max_episode_len
-    config.good_policy = arglist.good_policy
-    config.adv_policy = arglist.adv_policy
-    config.exp_name = arglist.exp_name
-    config.save_rate = arglist.save_rate
+    # wandb.init(project='RSRN', entity='haeri-hsn')
+    # config = wandb.config
+    # if arglist.test_mode:
+    #     config.test_mode = True
+    #     config.save_dir = arglist.load_dir
+    # else:
+    #     config.test_mode = False
+    # config.network = arglist.network
+    # config.num_agents = arglist.num_agents
+    # config.num_landmarks = arglist.num_landmarks
+    # config.agent_limitation = arglist.agent_limitation
+    # config.rsrn_type = arglist.rsrn_type
+    # config.boundary = '(-1.2,1.2)'
+    # config.learning_rate = arglist.lr
+    # config.gamma = arglist.gamma
+    # config.batch_size = arglist.batch_size
+    # config.num_units = arglist.num_units
+    # config.num_episodes = arglist.num_episodes
+    # config.max_episode_len = arglist.max_episode_len
+    # config.good_policy = arglist.good_policy
+    # config.adv_policy = arglist.adv_policy
+    # config.exp_name = arglist.exp_name
+    # config.save_rate = arglist.save_rate
     # if arglist.test_mode:
     #     arglist.network = 'self-interested'
     #     arglist.rsrn_type = 'WSM'
-
     train(arglist)
-    wandb.finish()
+    # wandb.finish()
 
     plt.show()
